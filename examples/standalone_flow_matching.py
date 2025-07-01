@@ -29,8 +29,8 @@ optimizer = torch.optim.Adam(flow.parameters(), 1e-2)
 loss_fn = nn.MSELoss()
 
 # Training loop
+x_1 = Tensor(make_moons(256, noise=0.05)[0])
 for _ in tqdm(range(10000)):
-    x_1 = Tensor(make_moons(256, noise=0.05)[0])
     x_0 = torch.randn_like(x_1)
     t = torch.rand(len(x_1), 1)
     
@@ -44,7 +44,7 @@ for _ in tqdm(range(10000)):
 # Visualization
 x = torch.randn(300, 2)
 n_steps = 8
-fig, axes = plt.subplots(1, n_steps + 1, figsize=(30, 4), sharex=True, sharey=True)
+fig, axes = plt.subplots(1, n_steps + 1, figsize=(30, 3), sharex=True, sharey=True)
 time_steps = torch.linspace(0, 1.0, n_steps + 1)
 
 axes[0].scatter(x.detach()[:, 0], x.detach()[:, 1], s=10)
