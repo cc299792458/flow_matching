@@ -1,5 +1,6 @@
 import time
 import torch
+from tqdm import tqdm
 from torch import nn, Tensor
 
 # flow_matching
@@ -85,7 +86,7 @@ optim = torch.optim.Adam(vf.parameters(), lr=lr)
 
 # train
 start_time = time.time()
-for i in range(iterations):
+for i in tqdm(range(iterations)):
     optim.zero_grad() 
 
     # sample data (user's responsibility): in this case, (X_0,X_1) ~ pi(X_0,X_1) = N(X_0|0,I)q(X_1)
@@ -164,7 +165,7 @@ gaussian_log_density = Independent(Normal(torch.zeros(2, device=device), torch.o
 num_acc = 10
 log_p_acc = 0
 
-for i in range(num_acc):
+for i in tqdm(range(num_acc)):
     _, log_p = solver.compute_likelihood(x_1=x_1, method='midpoint', step_size=step_size, exact_divergence=False, log_p0=gaussian_log_density)
     log_p_acc += log_p
 
