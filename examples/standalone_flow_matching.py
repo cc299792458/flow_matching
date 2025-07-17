@@ -35,16 +35,20 @@ loss_fn = nn.MSELoss()
 # Store loss values during training
 loss_history = []
 
-num_train = 1000
+num_train = 1
+std = 1
+# x_1 = torch.concat(
+#     [torch.randn(num_train, 2) + torch.tensor([10, 10]), torch.randn(num_train, 2) + torch.tensor([10, -10])]
+# )
+batchsize = 50000
+x_1 = torch.tensor([5, 5]).repeat((batchsize, 1)).reshape(-1, 2) 
 for _ in tqdm(range(1_000)):
-    x_1 = torch.concat(
-        [torch.randn(num_train, 2) + torch.tensor([10, 10]), torch.randn(num_train, 2) + torch.tensor([10, -10])]
-    )
     x_1_idx = torch.randperm(x_1.size(0))
     x_1 = x_1[x_1_idx, :]
-    x_0 = torch.concat(
-        [torch.randn(num_train, 2) + torch.tensor([-10, 10]), torch.randn(num_train, 2) + torch.tensor([-10, -10])]
-    )
+    # x_0 = torch.concat(
+    #     [torch.randn(num_train, 2) + torch.tensor([-10, 10]), torch.randn(num_train, 2) + torch.tensor([-10, -10])]
+    # )
+    x_0 = std * torch.randn(num_train * batchsize, 2)
     x_0_idx = torch.randperm(x_0.size(0))
     x_0 = x_0[x_0_idx, :]
     t = torch.rand(len(x_1), 1)
@@ -83,22 +87,27 @@ ax.grid(True)
 
 # Initialize points
 num_visualize = 500
-x_gif = torch.concat([torch.randn(num_visualize, 2) + torch.tensor([-10, 10]), 
-                      torch.randn(num_visualize, 2) + torch.tensor([-10, -10])
-                    ])
+# x_gif = torch.concat([torch.randn(num_visualize, 2) + torch.tensor([-10, 10]), 
+#                       torch.randn(num_visualize, 2) + torch.tensor([-10, -10])
+#                     ])
+x_gif = std * torch.randn(num_visualize, 2)
 x_gif.requires_grad = False
 scatter = ax.scatter(x_gif[:, 0].detach().numpy(), x_gif[:, 1].detach().numpy(), 
-                    c=['blue'] * num_visualize + ['green'] * num_visualize, s=50)
+                    # c=['blue'] * num_visualize + ['green'] * num_visualize, s=50)
+                    c=['blue'] * num_visualize, s=50)
 target_scatter = ax.scatter(x_1[:num_visualize, 0].detach().numpy(), x_1[:num_visualize, 1].detach().numpy(), 
                           c='red', s=50, marker='x', label='Targets')
+ax.set_xlim(-10, 10)
+ax.set_ylim(-10, 10)
 ax.legend()
 
 # Animation function
 def init():
     global x_gif
-    x_gif = torch.concat([torch.randn(num_visualize, 2) + torch.tensor([-10, 10]), 
-                          torch.randn(num_visualize, 2) + torch.tensor([-10, -10])
-                        ])
+    # x_gif = torch.concat([torch.randn(num_visualize, 2) + torch.tensor([-10, 10]), 
+    #                       torch.randn(num_visualize, 2) + torch.tensor([-10, -10])
+    #                     ])
+    x_gif = std * torch.randn(num_visualize, 2)
     x_gif.requires_grad = False
     scatter.set_offsets(x_gif.detach().numpy())
     return [scatter]
@@ -110,11 +119,12 @@ def update(frame):
     with torch.no_grad():
         x_gif = flow.step(x_t=x_gif, t_start=t_start, t_end=t_end)
     scatter.set_offsets(x_gif.detach().numpy())
+    ax.set_title(f"Forward Process - Step {frame}/{200}")
     return [scatter]
 
 # Create and display animation
 ani = FuncAnimation(fig, update, frames=200, 
                    init_func=init, 
-                   interval=50, blit=True)
+                   interval=50, blit=False)
 
 plt.show()
