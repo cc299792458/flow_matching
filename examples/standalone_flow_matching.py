@@ -145,14 +145,29 @@ plt.show()
 # First, we'll run the entire simulation without animation to compute the final variances
 num_visualize = 500
 num_frames = 200
-half = num_visualize // 2
+
+# FIX: Adjust group sizes for three conditions (blue, green, purple)
+group_size = num_visualize // 3
+remainder = num_visualize % 3
+group_sizes = [
+    group_size + (1 if i < remainder else 0)  # Distribute remainder among groups
+    for i in range(3)
+]
+
+# Define three target conditions
+target_1 = torch.tensor([5., 5.])     # Will be blue group
+target_2 = torch.tensor([5., -5.])    # Will be green group
+target_3 = torch.tensor([5., 0.])    # NEW: Purple group
 
 # Initialize particle states
 x_conditional = std * torch.randn(num_visualize, 2)
 x_unconditional = std * torch.randn(num_visualize, 2)
+
+# Create conditions tensor for three groups [target_1, target_2, target_3]
 conditions = torch.cat([
-    target_1.repeat(half, 1),
-    target_2.repeat(num_visualize - half, 1)
+    target_1.repeat(group_sizes[0], 1),    # Blue group
+    target_2.repeat(group_sizes[1], 1),    # Green group
+    target_3.repeat(group_sizes[2], 1)     # NEW: Purple group
 ])
 
 # Define storage for final particle states
@@ -193,10 +208,11 @@ for frame in tqdm(range(num_frames)):
 print("\nFinal Standard Deviations:")
 print("-" * 30)
 
-# Conditional group metrics
+# Conditional group metrics - now with three groups
 cond_groups = {
-    '[5,5]': final_conditional[:half],
-    '[5,-5]': final_conditional[half:]
+    '[5,5]': final_conditional[:group_sizes[0]],                          # Blue group
+    '[5,-5]': final_conditional[group_sizes[0]:group_sizes[0]+group_sizes[1]],  # Green group
+    '[5,0]': final_conditional[group_sizes[0]+group_sizes[1]:]            # NEW: Purple group
 }
 
 for group, tensor in cond_groups.items():
@@ -206,7 +222,7 @@ for group, tensor in cond_groups.items():
     print(f"  X-axis: {std_x:.4f}")
     print(f"  Y-axis: {std_y:.4f}")
 
-# Unconditional metrics
+# Unconditional metrics remain unchanged
 uncond_std_x = torch.std(final_unconditional[:, 0]).item()
 uncond_std_y = torch.std(final_unconditional[:, 1]).item()
 print(f"\nUnconditional Group:")
@@ -225,13 +241,15 @@ ax.grid(True)
 x_cond_viz = std * torch.randn(num_visualize, 2)
 x_uncond_viz = std * torch.randn(num_visualize, 2)
 
-# Color coding: 
-# Blue = [5,5] conditional | Green = [5,-5] conditional | Gray = Unconditional
-colors_cond = ['blue'] * half + ['green'] * (num_visualize - half)
+# Color coding with three groups: 
+# Blue = [5,5] | Green = [5,-5] | Purple = [5,0]
+colors_cond = (['blue'] * group_sizes[0] + 
+               ['green'] * group_sizes[1] + 
+               ['purple'] * group_sizes[2])  # NEW: Purple for third group
+
 color_uncond = 'gray'
 
-# FIX: Initialize scatter plots with starting positions
-# Provide initial positions to avoid the "size 0" error
+# Initialize scatter plots
 scatter_cond = ax.scatter(
     x_cond_viz[:, 0].detach().numpy(),
     x_cond_viz[:, 1].detach().numpy(),
@@ -250,11 +268,11 @@ scatter_uncond = ax.scatter(
     label='Unconditional'
 )
 
-# Plot target points
+# Plot target points - now include the third condition
 target_scatter = ax.scatter(
-    [target_1[0], target_2[0]], 
-    [target_1[1], target_2[1]],
-    c=['red', 'purple'], 
+    [target_1[0], target_2[0], target_3[0]], 
+    [target_1[1], target_2[1], target_3[1]],
+    c=['red', 'purple', 'magenta'], 
     s=200, 
     marker='*', 
     edgecolor='black'
