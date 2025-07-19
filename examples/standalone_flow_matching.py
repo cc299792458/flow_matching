@@ -5,6 +5,23 @@ from torch import nn, Tensor
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
+# PARAMETERIZED TARGET POINTS
+# Training targets (used only during model training)
+TRAIN_TARGETS = [
+    torch.tensor([5., 1.]),   # Target 1
+    torch.tensor([5., -1.]),  # Target 2
+]
+
+# Generation targets (used during visualization/sampling)
+# Contains both seen and unseen targets
+GEN_TARGETS = [
+    torch.tensor([5., 1.]),   # Seen during training (blue group)
+    torch.tensor([5., -1.]),  # Seen during training (green group)
+    torch.tensor([5., 0.5]),   # Unseen during training (purple group)
+]
+NUM_TRAIN_TARGETS = len(TRAIN_TARGETS)
+NUM_GEN_TARGETS = len(GEN_TARGETS)
+
 class Flow(nn.Module):
     def __init__(self, dim: int = 2, h: int = 64):
         super().__init__()
@@ -96,17 +113,11 @@ num_train = 1
 std = 1
 batchsize = 500
 
-# Define two target conditions
-num_target = 2
-target_1 = torch.tensor([5., 5.])
-target_2 = torch.tensor([5., -5.])
-
+# Training loop uses only TRAIN_TARGETS
 for _ in tqdm(range(1_000)):
-    # Randomly assign conditions (50% target_1, 50% target_2)
-    condition_mask = torch.rand(batchsize, 1) < 0.5
-    x_1 = torch.where(condition_mask, 
-                     target_1.repeat(batchsize, 1), 
-                     target_2.repeat(batchsize, 1))
+    # Randomly assign conditions from TRAIN_TARGETS (50/50 split)
+    target_indices = torch.randint(0, NUM_TRAIN_TARGETS, (batchsize,))
+    x_1 = torch.stack([TRAIN_TARGETS[i] for i in target_indices])
     
     # Shuffle samples
     idx = torch.randperm(batchsize)
@@ -146,28 +157,21 @@ plt.show()
 num_visualize = 500
 num_frames = 200
 
-# FIX: Adjust group sizes for three conditions (blue, green, purple)
-group_size = num_visualize // 3
-remainder = num_visualize % 3
+# Calculate group sizes for visualization based on GEN_TARGETS
+group_size = num_visualize // NUM_GEN_TARGETS
+remainder = num_visualize % NUM_GEN_TARGETS
 group_sizes = [
     group_size + (1 if i < remainder else 0)  # Distribute remainder among groups
-    for i in range(3)
+    for i in range(NUM_GEN_TARGETS)
 ]
-
-# Define three target conditions
-target_1 = torch.tensor([5., 5.])     # Will be blue group
-target_2 = torch.tensor([5., -5.])    # Will be green group
-target_3 = torch.tensor([5., 0.])    # NEW: Purple group
 
 # Initialize particle states
 x_conditional = std * torch.randn(num_visualize, 2)
 x_unconditional = std * torch.randn(num_visualize, 2)
 
-# Create conditions tensor for three groups [target_1, target_2, target_3]
+# Create conditions tensor using GEN_TARGETS (includes unseen target)
 conditions = torch.cat([
-    target_1.repeat(group_sizes[0], 1),    # Blue group
-    target_2.repeat(group_sizes[1], 1),    # Green group
-    target_3.repeat(group_sizes[2], 1)     # NEW: Purple group
+    GEN_TARGETS[i].repeat(group_sizes[i], 1) for i in range(NUM_GEN_TARGETS)
 ])
 
 # Define storage for final particle states
@@ -208,12 +212,14 @@ for frame in tqdm(range(num_frames)):
 print("\nFinal Standard Deviations:")
 print("-" * 30)
 
-# Conditional group metrics - now with three groups
-cond_groups = {
-    '[5,5]': final_conditional[:group_sizes[0]],                          # Blue group
-    '[5,-5]': final_conditional[group_sizes[0]:group_sizes[0]+group_sizes[1]],  # Green group
-    '[5,0]': final_conditional[group_sizes[0]+group_sizes[1]:]            # NEW: Purple group
-}
+# Conditional group metrics - now using GEN_TARGETS
+cond_groups = {}
+start_idx = 0
+for i in range(NUM_GEN_TARGETS):
+    end_idx = start_idx + group_sizes[i]
+    group_name = str(GEN_TARGETS[i].tolist())
+    cond_groups[group_name] = final_conditional[start_idx:end_idx]
+    start_idx = end_idx
 
 for group, tensor in cond_groups.items():
     std_x = torch.std(tensor[:, 0]).item()
@@ -241,11 +247,11 @@ ax.grid(True)
 x_cond_viz = std * torch.randn(num_visualize, 2)
 x_uncond_viz = std * torch.randn(num_visualize, 2)
 
-# Color coding with three groups: 
-# Blue = [5,5] | Green = [5,-5] | Purple = [5,0]
-colors_cond = (['blue'] * group_sizes[0] + 
-               ['green'] * group_sizes[1] + 
-               ['purple'] * group_sizes[2])  # NEW: Purple for third group
+# Color coding - define colors for each target group
+COLORS = ['blue', 'green', 'purple', 'orange', 'cyan']  # Add more colors if needed
+colors_cond = []
+for i in range(NUM_GEN_TARGETS):
+    colors_cond.extend([COLORS[i % len(COLORS)]] * group_sizes[i])
 
 color_uncond = 'gray'
 
@@ -268,11 +274,11 @@ scatter_uncond = ax.scatter(
     label='Unconditional'
 )
 
-# Plot target points - now include the third condition
+# Plot target points - using GEN_TARGETS (includes unseen target)
 target_scatter = ax.scatter(
-    [target_1[0], target_2[0], target_3[0]], 
-    [target_1[1], target_2[1], target_3[1]],
-    c=['red', 'purple', 'magenta'], 
+    [t[0] for t in GEN_TARGETS], 
+    [t[1] for t in GEN_TARGETS],
+    c=COLORS[:NUM_GEN_TARGETS], 
     s=200, 
     marker='*', 
     edgecolor='black'
