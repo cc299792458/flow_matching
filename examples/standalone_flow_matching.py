@@ -38,7 +38,19 @@ class Flow(nn.Module):
         # 3. Apply guidance mixing
         return uncond_output + guidance * (cond_output - uncond_output)
     
-    def step(self, x_t: Tensor, t_start: float, t_end: float, condition: Tensor, guidance: float = 1.0) -> Tensor:
+    def step(self, x_t: Tensor, t_start: float, t_end: float, condition: Tensor, guidance: float = 1.0, 
+            unconditional: bool = False) -> Tensor:
+        """
+        Generate next step with optional unconditional generation
+        
+        Args:
+            x_t: Current state tensor
+            t_start: Starting time
+            t_end: Ending time
+            condition: Conditional input tensor
+            guidance: Guidance scale factor
+            unconditional: Flag for unconditional generation
+        """
         batch_size = x_t.size(0)
         t_mid = t_start + (t_end - t_start) / 2
         
@@ -46,13 +58,18 @@ class Flow(nn.Module):
         t_start_tensor = torch.full((batch_size, 1), t_start, dtype=torch.float32)
         t_mid_tensor = torch.full((batch_size, 1), t_mid, dtype=torch.float32)
         
+        # Use null embedding if unconditional generation requested
+        if unconditional:
+            # Override condition with null embedding during sampling
+            condition = self.null_embed.expand_as(condition)
+            
         # First step: midpoint prediction (with guidance)
         k1 = self(
             t=t_start_tensor, 
             x_t=x_t, 
             condition=condition,
             guidance=guidance,
-            use_guidance=True
+            use_guidance=(not unconditional)  # Disable guidance for unconditional
         )
         x_mid = x_t + k1 * (t_end - t_start) / 2
         
@@ -62,7 +79,7 @@ class Flow(nn.Module):
             x_t=x_mid,
             condition=condition,
             guidance=guidance,
-            use_guidance=True
+            use_guidance=(not unconditional)  # Disable guidance for unconditional
         )
         return x_t + k2 * (t_end - t_start)
 
@@ -121,165 +138,180 @@ plt.ylabel('Loss')
 plt.title('Training Loss Curve')
 plt.grid(True)
 
-window_size = 100
-smoothed_loss = np.convolve(loss_history, np.ones(window_size)/window_size, mode='valid')
-plt.plot(smoothed_loss, label=f'Smoothed (window={window_size})', color='red', linewidth=2)
-
 plt.legend()
 plt.tight_layout()
 plt.show()
 
-# Animation setup with two subplots: left for trajectories, right for std metrics
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-ax1.set_title("Flow Matching with Conditional Guidance (λ=1.5)")
-ax1.grid(True)
-
-# Right plot for standard deviation tracking (X and Y separately)
-ax2.set_title("Standard Deviation by Condition Group (X/Y)")
-ax2.set_xlabel("Generation Step")
-ax2.set_ylabel("Standard Deviation")
-ax2.grid(True)
-
-# Initialize samples for visualization
-num_visualize = 500  # Number of particles to visualize
-x_gif = std * torch.randn(num_visualize, 2)  # Initial random samples
-x_gif.requires_grad = False
-
-# Storage for standard deviation history
-std_history = []
-
-# Create condition assignments (half [5,5], half [5,-5])
+# First, we'll run the entire simulation without animation to compute the final variances
+num_visualize = 500
+num_frames = 200
 half = num_visualize // 2
+
+# Initialize particle states
+x_conditional = std * torch.randn(num_visualize, 2)
+x_unconditional = std * torch.randn(num_visualize, 2)
 conditions = torch.cat([
     target_1.repeat(half, 1),
     target_2.repeat(num_visualize - half, 1)
 ])
-condition_groups = ['[5,5]'] * half + ['[5,-5]'] * (num_visualize - half)
 
-# Color coding: blue for [5,5], green for [5,-5]
-colors = ['blue'] * half + ['green'] * (num_visualize - half)
-scatter = ax1.scatter(x_gif[:, 0].detach().numpy(), x_gif[:, 1].detach().numpy(), 
-                     c=colors, s=50, alpha=0.6)
+# Define storage for final particle states
+final_conditional = None
+final_unconditional = None
 
-# Plot target points with star markers
-target_scatter = ax1.scatter(
-    [target_1[0], target_2[0]], [target_1[1], target_2[1]],
-    c=['red', 'purple'], s=200, marker='*', edgecolor='black', 
-    label=['Target (5,5)', 'Target (5,-5)']
-)
-
-# Set axis limits for main plot
-ax1.set_xlim(-10, 10)
-ax1.set_ylim(-10, 10)
-ax1.legend(loc='upper right')
-
-# Initialize std plot lines for each condition and axis
-steps = []
-std_lines = {
-    '[5,5]_x': ax2.plot([], [], 'b-', label='[5,5] X')[0],  # Solid blue for [5,5] X
-    '[5,5]_y': ax2.plot([], [], 'b--', label='[5,5] Y')[0],  # Dashed blue for [5,5] Y
-    '[5,-5]_x': ax2.plot([], [], 'g-', label='[5,-5] X')[0],  # Solid green for [5,-5] X
-    '[5,-5]_y': ax2.plot([], [], 'g--', label='[5,-5] Y')[0]  # Dashed green for [5,-5] Y
-}
-ax2.legend()
-ax2.set_xlim(0, 200)  # 200 frames total
-ax2.set_ylim(0, 5)  # Expected std range (adjust as needed)
-
-# Track animation completion status
-animation_complete = False
-final_std_values = None
-
-def init():
-    """Initialize animation with random samples"""
-    global x_gif, std_history, animation_complete
-    x_gif = std * torch.randn(num_visualize, 2)
-    x_gif.requires_grad = False
-    scatter.set_offsets(x_gif.detach().numpy())
-    std_history = []
-    animation_complete = False
-    return [scatter]
-
-def update(frame):
-    """Update function for each animation frame"""
-    global x_gif, std_history, animation_complete, final_std_values
+# Run simulation to get final variances
+print("Computing final variances...")
+for frame in tqdm(range(num_frames)):
+    t_start = frame / num_frames
+    t_end = (frame + 1) / num_frames
     
-    # Calculate current time step
-    t_start = (frame - 1) / 200 if frame > 0 else 0.0
-    t_end = frame / 200
-    
-    # Generate next step with guidance
     with torch.no_grad():
-        x_gif = flow.step(
-            x_t=x_gif,
+        # Update conditional particles
+        x_conditional = flow.step(
+            x_t=x_conditional,
             t_start=t_start,
             t_end=t_end,
             condition=conditions,
             guidance=1.5
         )
+        
+        # Update unconditional particles
+        x_unconditional = flow.step(
+            x_t=x_unconditional,
+            t_start=t_start,
+            t_end=t_end,
+            condition=conditions,
+            unconditional=True
+        )
     
-    # Calculate standard deviations per condition group
-    group_data = {
-        '[5,5]': {'x': [], 'y': []},
-        '[5,-5]': {'x': [], 'y': []}
-    }
+    # Store final states on last frame
+    if frame == num_frames - 1:
+        final_conditional = x_conditional.clone()
+        final_unconditional = x_unconditional.clone()
+
+# Calculate final variances
+print("\nFinal Standard Deviations:")
+print("-" * 30)
+
+# Conditional group metrics
+cond_groups = {
+    '[5,5]': final_conditional[:half],
+    '[5,-5]': final_conditional[half:]
+}
+
+for group, tensor in cond_groups.items():
+    std_x = torch.std(tensor[:, 0]).item()
+    std_y = torch.std(tensor[:, 1]).item()
+    print(f"{group} Group (Conditional):")
+    print(f"  X-axis: {std_x:.4f}")
+    print(f"  Y-axis: {std_y:.4f}")
+
+# Unconditional metrics
+uncond_std_x = torch.std(final_unconditional[:, 0]).item()
+uncond_std_y = torch.std(final_unconditional[:, 1]).item()
+print(f"\nUnconditional Group:")
+print(f"  X-axis: {uncond_std_x:.4f}")
+print(f"  Y-axis: {uncond_std_y:.4f}")
+
+print("-" * 30)
+print("Starting visualization animation...\n")
+
+# Now create the visualization animation
+fig, ax = plt.subplots(figsize=(8, 8))
+ax.set_title("Flow Matching - Conditional vs Unconditional")
+ax.grid(True)
+
+# Reinitialize particle states for visualization
+x_cond_viz = std * torch.randn(num_visualize, 2)
+x_uncond_viz = std * torch.randn(num_visualize, 2)
+
+# Color coding: 
+# Blue = [5,5] conditional | Green = [5,-5] conditional | Gray = Unconditional
+colors_cond = ['blue'] * half + ['green'] * (num_visualize - half)
+color_uncond = 'gray'
+
+# FIX: Initialize scatter plots with starting positions
+# Provide initial positions to avoid the "size 0" error
+scatter_cond = ax.scatter(
+    x_cond_viz[:, 0].detach().numpy(),
+    x_cond_viz[:, 1].detach().numpy(),
+    c=colors_cond, 
+    s=30, 
+    alpha=0.6, 
+    label='Conditional'
+)
+
+scatter_uncond = ax.scatter(
+    x_uncond_viz[:, 0].detach().numpy(),
+    x_uncond_viz[:, 1].detach().numpy(),
+    c=color_uncond, 
+    s=30, 
+    alpha=0.6, 
+    label='Unconditional'
+)
+
+# Plot target points
+target_scatter = ax.scatter(
+    [target_1[0], target_2[0]], 
+    [target_1[1], target_2[1]],
+    c=['red', 'purple'], 
+    s=200, 
+    marker='*', 
+    edgecolor='black'
+)
+
+# Set axis limits
+ax.set_xlim(-10, 10)
+ax.set_ylim(-10, 10)
+ax.legend()
+
+def init():
+    """Initialize animation with random samples"""
+    global x_cond_viz, x_uncond_viz
+    x_cond_viz = std * torch.randn(num_visualize, 2)
+    x_uncond_viz = std * torch.randn(num_visualize, 2)
     
-    # Group samples by their assigned condition
-    for i in range(num_visualize):
-        group = condition_groups[i]
-        group_data[group]['x'].append(x_gif[i, 0].item())
-        group_data[group]['y'].append(x_gif[i, 1].item())
+    # Set initial positions
+    scatter_cond.set_offsets(x_cond_viz.numpy())
+    scatter_uncond.set_offsets(x_uncond_viz.numpy())
+    return [scatter_cond, scatter_uncond]
+
+def update(frame):
+    """Update function for each animation frame"""
+    global x_cond_viz, x_uncond_viz
     
-    # Store metrics for current frame
-    current_metrics = {'step': frame}
-    for group in group_data:
-        current_metrics[f'{group}_x'] = torch.std(torch.tensor(group_data[group]['x'])).item()
-        current_metrics[f'{group}_y'] = torch.std(torch.tensor(group_data[group]['y'])).item()
+    t_start = frame / num_frames
+    t_end = (frame + 1) / num_frames
     
-    std_history.append(current_metrics)
-    
-    # Mark completion on final frame
-    if frame == 199:
-        animation_complete = True
-        final_std_values = current_metrics
+    with torch.no_grad():
+        # Update conditional particles
+        x_cond_viz = flow.step(
+            x_t=x_cond_viz,
+            t_start=t_start,
+            t_end=t_end,
+            condition=conditions,
+            guidance=1.5
+        )
+        
+        # Update unconditional particles
+        x_uncond_viz = flow.step(
+            x_t=x_uncond_viz,
+            t_start=t_start,
+            t_end=t_end,
+            condition=conditions,
+            unconditional=True
+        )
     
     # Update visualization
-    scatter.set_offsets(x_gif.detach().numpy())
-    ax1.set_title(f"Conditional Generation (λ=1.5) - Step {frame+1}/200")
+    scatter_cond.set_offsets(x_cond_viz.numpy())
+    scatter_uncond.set_offsets(x_uncond_viz.numpy())
+    ax.set_title(f"Generation Process - Step {frame+1}/{num_frames}")
     
-    # Update std plot data
-    steps = [s['step'] for s in std_history]
-    for key in std_lines:
-        std_lines[key].set_data(steps, [s[key] for s in std_history])
-    
-    # Auto-scale y-axis based on observed std values
-    all_stds = [v for s in std_history for k,v in s.items() if k != 'step']
-    current_max_std = max(all_stds) if all_stds else 1.0
-    ax2.set_ylim(0, current_max_std * 1.1)
-    
-    return [scatter]
+    return [scatter_cond, scatter_uncond]
 
-# Create animation with 200 frames
-ani = FuncAnimation(fig, update, frames=200, 
+# Create animation
+ani = FuncAnimation(fig, update, frames=num_frames, 
                    init_func=init, 
                    interval=50, blit=False)
 
 plt.show()
-
-# Print final metrics after animation completes
-if std_history:
-    if animation_complete:
-        print("\nAnimation completed successfully. Final Standard Deviations:")
-    else:
-        print("\nWarning: Animation interrupted. Partial results:")
-    
-    for group in ['[5,5]', '[5,-5]']:
-        print(f"\n{group} Group:")
-        print(f"  X-axis std: {final_std_values[f'{group}_x']:.4f}")
-        print(f"  Y-axis std: {final_std_values[f'{group}_y']:.4f}")
-    
-    # Check for convergence
-    if animation_complete:
-        last_quarter = len(std_history) // 4
-        last_stds = [s['[5,5]_x'] for s in std_history[-last_quarter:]]
-        if max(last_stds) - min(last_stds) > 0.1:
-            print("\nNote: X-axis std for [5,5] shows possible non-convergence")
